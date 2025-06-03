@@ -103,7 +103,7 @@ wtf_entry_rate(wtf_entry_t *entry, char *pat, size_t pat_sz)
   ssize_t most_distant_marker = -1;
 
   /* Clear old match markers. */
-  memset(entry->markers, false, lsz);
+  memset(marks, false, lsz);
 
   entry->inaccuracy = pat_sz;
 
@@ -202,17 +202,24 @@ finder_start(cvector(wtf_entry_t) *list)
 
   do
   {
-    if (selected >= cvector_size(filtered))
-    {
-      selected = cvector_size(filtered) - 1;
-      scroll = 0;
-    }
-
-    /* Go to the beginning if we get no matches and then we get matches again instead of going at the end of the list. */
     if (cvector_size(filtered) == 0)
     {
+      /* Go to the beginning if we get no matches and then we get matches again instead of going at the end of the list. */
       selected = 0;
       scroll = 0;
+    }
+    else
+    {
+      /*
+       * Reset scroll and select the last visible item if `filtered` shrank below the selector.
+       * Then, just adjust scroll again to fix selector going out of sight.
+       */
+      if (selected >= cvector_size(filtered))
+      {
+        selected = cvector_size(filtered) - 1;
+        scroll = 0;
+      }
+      scroll_to_fit(&scroll, selected, max_visible);
     }
 
     /*
