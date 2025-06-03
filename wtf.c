@@ -14,93 +14,122 @@
 
 typedef struct
 {
-  char *string;
-  size_t length;
-  size_t distance;
-  int score;
+  char *label;
+  size_t label_sz;
+  int distance;
+  int inaccuracy;
   bool *markers;
 }
-str_rate_t;
+wtf_entry_t;
 
-str_rate_t
-str_rate_init(char *str, size_t len)
+wtf_entry_t
+wtf_entry_new(char *label, size_t lsz)
 {
-  bool *markers = malloc(len);
-  memset(markers, false, len);
+  bool *markers = malloc(lsz);
+  memset(markers, false, lsz);
 
-  return (str_rate_t){
-    .string = str,
-    .length = len,
+  return (wtf_entry_t){
+    .label = label,
+    .label_sz = lsz,
     .distance = 0,
-    .score = 0,
+    .inaccuracy = 0,
     .markers = markers,
   };
 }
 
 void
-str_rate_free(str_rate_t *rating)
+str_rate_free(wtf_entry_t *entry)
 {
-  free(rating->markers);
+  free(entry->markers);
 }
 
 #define eq_case_insensitive(a, b) \
   (towlower((a)) == towlower((b)))
 
-#define minimum(x, y, z) \
-  ((x) < (y) ? ((z) < (x) ? (z) : (x)) : ((z) < (y) ? (z) : (x)))
+int
+minimum(int x, int y)
+{
+  return x < y ? x : y;
+}
 
 int
-levenshtein_distance(char* a, size_t asz, char* b, size_t bsz)
+minimum3(int x, int y, int z)
 {
-  int d[asz][bsz];
-  memset(d, 0, asz * bsz);
+  return x < y ? minimum(x, z) : minimum(y, z);
+}
 
-  for (size_t i = 1; i < asz; i++) d[i][0] = i;
-  for (size_t i = 1; i < bsz; i++) d[0][i] = i;
+/*
+ * Levenshtein distance.
+ * Implemented from Wikipedia.org: https://en.wikipedia.org/wiki/Levenshtein_distance
+ *
+ * Tweaked array indexing though.
+ */
+int
+ldistance(char* a, size_t asz, char* b, size_t bsz)
+{
+  int d[asz+1][bsz+1];
+  memset(d, 0, (asz+1 * sizeof(int)) * (bsz+1 * sizeof(int)));
 
-  for (size_t j = 1; j < bsz; j++)
+  for (size_t i = 0; i < asz; i++) d[i][0] = i;
+  for (size_t i = 0; i < bsz; i++) d[0][i] = i;
+
+  for (size_t j = 0; j < bsz; j++)
   {
-    for (size_t i = 1; i < asz; i++)
+    for (size_t i = 0; i < asz; i++)
     {
       int cost = (a[i] == b[j]) ? 0 : 1;
 
-      d[i][j] = minimum(
-        d[i-1][j] + 1,
-        d[i][j-1] + 1,
-        d[i-1][j-1] + cost
+      d[i+1][j+1] = minimum3(
+        d[i][j+1] + 1,
+        d[i+1][j] + 1,
+        d[i][j] + cost
       );
     }
   }
 
-  return d[asz-1][bsz-1];
+  return d[asz][bsz];
 }
 
+/*
+ * TODO: Document/explain this algorithm.
+ */
 void
-str_rate_rate(str_rate_t *rating, char *pat, size_t pat_len)
+wtf_entry_rate(wtf_entry_t *entry, char *pat, size_t pat_sz)
 {
-  /* Clear old match markers. */
-  memset(rating->markers, false, rating->length);
+  char *l = entry->label;
+  size_t lsz = entry->label_sz;
+  bool *marks = entry->markers;
 
-  rating->score = pat_len;
+  ssize_t most_distant_marker = -1;
+
+  /* Clear old match markers. */
+  memset(entry->markers, false, lsz);
+
+  entry->inaccuracy = pat_sz;
 
   size_t j = 0; /* Index in pattern. */
-  for (size_t i = 0; i < rating->length && j < pat_len; i++)
+  for (size_t i = 0; i < lsz && j < pat_sz; i++)
   {
-    if (eq_case_insensitive(rating->string[i], pat[j]))
+    if (eq_case_insensitive(l[i], pat[j]))
     {
-      rating->markers[i] = true; /* Mark matched character. */
-      rating->score--;
+      if (most_distant_marker < 0) most_distant_marker = i;
+      marks[i] = true; /* Mark matched character. */
+      entry->inaccuracy--;
       j++;
     }
   }
 
-  rating->score += (pat_len - j);
+  entry->inaccuracy += (pat_sz - j);
+  entry->distance = ldistance(
+    l, lsz,
+    pat, pat_sz
+  ) + most_distant_marker + entry->inaccuracy;
+}
 
-  rating->distance = rating->score;
-  rating->distance += levenshtein_distance(
-    rating->string, rating->length,
-    pat, pat_len
-  );
+int
+wtf_entry_cmp(const wtf_entry_t **a, const wtf_entry_t **b)
+{
+  return (*a)->distance - (*b)->distance;
 }
 
 /* Calculates Y coordinate from the bottom or top of the terminal. */
@@ -134,14 +163,8 @@ scroll_to_fit(size_t *scroll, size_t selected, size_t max_visible)
     cvector_set_size((dst), src_sz);     \
   } while (0)
 
-int
-_cmp_str_rate(const str_rate_t **a, const str_rate_t **b)
-{
-  return (*a)->distance - (*b)->distance;
-}
-
-str_rate_t*
-start_finder(cvector(str_rate_t) *list)
+wtf_entry_t*
+finder_start(cvector(wtf_entry_t) *list)
 {
   {
     int tb_status = tb_init();
@@ -158,9 +181,9 @@ start_finder(cvector(str_rate_t) *list)
   struct tb_event ev;
 
   /* The entry we return. */
-  str_rate_t *entry = NULL;
+  wtf_entry_t *entry = NULL;
 
-  str_rate_t **filtered = NULL;
+  wtf_entry_t **filtered = NULL;
 
   char *query = NULL;
   size_t cursor = 0;
@@ -236,7 +259,7 @@ start_finder(cvector(str_rate_t) *list)
       for (size_t i = 0; i < visible; i++)
       {
         size_t real_idx = scroll + i;
-        str_rate_t *item = filtered[real_idx];
+        wtf_entry_t *item = filtered[real_idx];
         size_t primary_fg_attr = TB_DEFAULT;
 
         if (real_idx == selected)
@@ -245,11 +268,11 @@ start_finder(cvector(str_rate_t) *list)
           primary_fg_attr |= TB_BOLD;
         }
 
-        for (size_t j = 0; j < item->length; j++)
+        for (size_t j = 0; j < item->label_sz; j++)
         {
           size_t fg_attr = primary_fg_attr;
           if (item->markers[j]) fg_attr |= TB_RED | TB_BOLD;
-          tb_set_cell(SELECTOR_SZ + 1 + j, calcy(2 + i), item->string[j], fg_attr, TB_DEFAULT);
+          tb_set_cell(SELECTOR_SZ + 1 + j, calcy(2 + i), item->label[j], fg_attr, TB_DEFAULT);
         }
       }
     }
@@ -354,22 +377,22 @@ start_finder(cvector(str_rate_t) *list)
           /* We don't need to worry about destroying the strings. */
           cvector_set_size(filtered, 0);
           for (size_t i = 0; i < cvector_size(*list); i++) {
-            str_rate_rate(&(*list)[i], query, query_sz);
-            if ((*list)[i].score <= FUZZ_MAX_SCORE) cvector_push_back(filtered, &(*list)[i]);
+            wtf_entry_rate(&(*list)[i], query, query_sz);
+            if ((*list)[i].inaccuracy <= FUZZ_MAX_INACCURACY) cvector_push_back(filtered, &(*list)[i]);
           }
 
           qsort(
             filtered,
             cvector_size(filtered),
-            sizeof(str_rate_t*),
-            (int (*)(const void*, const void*))_cmp_str_rate
+            sizeof(wtf_entry_t*),
+            (int (*)(const void*, const void*))wtf_entry_cmp
           );
         }
         else
         {
           /* Clear match markers - since we aren't matching against anything. */
           for (size_t i = 0; i < cvector_size(*list); i++)
-            memset(filtered[i]->markers, false, filtered[i]->length);
+            memset(filtered[i]->markers, false, filtered[i]->label_sz);
           copy_item_refs(*list, filtered);
         }
       }
@@ -455,10 +478,10 @@ main(int argc, char **argv)
 
   int err = 0;
   char *buf = NULL;
-  str_rate_t *list = NULL;
+  wtf_entry_t *list = NULL;
 
   cvector_init(buf, 512, NULL);
-  cvector_init(list, 32, NULL);
+  cvector_init(list, 64, NULL);
 
   read_to_vec(&buf, 255, stdin);
 
@@ -479,7 +502,7 @@ main(int argc, char **argv)
         {
           cvector_push_back(
             list,
-            str_rate_init((char*)(buf + offset), size)
+            wtf_entry_new((char*)(buf + offset), size)
           );
           offset += size;
           size = 0;
@@ -495,14 +518,14 @@ main(int argc, char **argv)
     if (size > 0)
       cvector_push_back(
         list,
-        str_rate_init((char*)(buf + offset), size)
+        wtf_entry_new((char*)(buf + offset), size)
       );
   }
 
-  str_rate_t *entry = start_finder(&list);
+  wtf_entry_t *entry = finder_start(&list);
   if (entry)
   {
-    printf("%.*s\n", (int)entry->length, entry->string);
+    printf("%.*s\n", (int)entry->label_sz, entry->label);
   }
   else
   {

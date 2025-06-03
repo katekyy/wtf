@@ -10,13 +10,12 @@
 // #define DIRECTION_TOP
 
 /*
- * Indicates the score threshold for filtering items.
- * Lower score is better, and if it's lower or equal the number below,
- * we show the entry instead of hiding it.
+ * Indicates the highest possible entry inaccuracy from the query,
+ * before it is filtered out.
  *
- * Recommended value: 2
+ * Recommended value: 1
  */
-#define FUZZ_MAX_SCORE 2
+#define FUZZ_MAX_INACCURACY 1
 
 /*
  * Character used to fill the status bar. (Can be unicode)
